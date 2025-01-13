@@ -63,6 +63,7 @@ int main(int argc, char* argv[]) {
     int dim3_start = reader.GetInteger("general", "dim3_start", 1144);
     int dim3_stop = reader.GetInteger("general", "dim3_stop", 1400);
     int imsz = reader.GetInteger("general", "imsz", 128);
+    int idx = reader.GetInteger("general", "slice", 50);;
     std::string model_path = reader.Get("general", "model_path", "../../model_traced.pt");
     std::string fileName = reader.Get("general", "fileName", "../../22102024.vrs");
     std::string distpath = reader.Get("general", "distpath", "../../utils/pre_computed_distance/c1475_x0.00.pt");
@@ -75,7 +76,7 @@ int main(int argc, char* argv[]) {
     /////////////////////////////////////////////////////////////////////////// load vrs
     std::vector<std::vector<std::vector<int16_t>>> raw_data = load_vrs(fileName, nt, ntx, verbose);
 
-    ///////////////////////////////////////////////////////////////////////// try plot  
+    ///////////////////////////////////////////////////////////////////////// Interpolation 
     torch::Tensor tensor = convert_to_tensor(raw_data);
     // torch::Tensor tensor = torch::zeros({256, 58, 3072});
     std::cout <<"Sizes : " << tensor.sizes() << std::endl;
@@ -104,7 +105,6 @@ int main(int argc, char* argv[]) {
  
 
     // get one slice
-    int idx = 50;
     torch::Tensor input = interpolated_tensor.slice(1, idx, idx+1);
     
     std::cout << "after interpolation" << std::endl;
@@ -161,7 +161,12 @@ int main(int argc, char* argv[]) {
     image.convertTo(displaySlice, CV_8U, 255.0); // Scale from [0, 1] to [0, 255
 
     // // Step 5: Display the image using OpenCV
-    cv::imshow("Tensor Image", displaySlice);
+    cv::Mat colorMapped;
+    cv::applyColorMap(displaySlice, colorMapped, cv::COLORMAP_JET);
+    cv::Mat rotatedImage;
+    cv::rotate(colorMapped, rotatedImage, cv::ROTATE_90_CLOCKWISE);
+    cv::namedWindow("Scalable Image", cv::WINDOW_NORMAL);
+    cv::imshow("Tensor Image", rotatedImage);
     cv::waitKey(0); // Wait for a key press before closing the window
 
     return 0;
