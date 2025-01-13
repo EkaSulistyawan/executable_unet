@@ -5,6 +5,9 @@
 #include <cstring>
 #include <stdint.h> // For uint8_t, uint16_t, etc.
 
+#include <torch/script.h> // For TorchScript
+#include <torch/torch.h> // For TorchScript
+
 struct HeaderInfo {
     uint16_t version;
     uint8_t compression;
@@ -89,40 +92,17 @@ std::vector<std::vector<std::vector<int16_t>>> load_vrs(const std::string& fileN
 
     // reshape data to 3D
     int idx = 0;
-    for (int i=0; i < 256;++i){
-        for (int j=0; j < ntx; ++j){
-            for (int k=0; k < nt; ++k){
-                data2[i][j][k] = data[idx++];
-            }
+    for (int i = 0; i < 256; ++i) {
+        for (int j = 0; j < ntx; ++j) {
+            // Copy each slice of data directly
+            std::memcpy(&data2[i][j][0], &data[idx], nt * sizeof(int16_t));
+            idx += nt;
         }
     }
-    // std::cout << idx << " " << headerInfo.numdatapoints << std::endl;
 
-    // // Reshape data (dim[1], dim[0])
-    // std::vector<std::vector<int16_t>> reshaped_data(headerInfo.dim[1], std::vector<int16_t>(headerInfo.dim[0]));
-    // int idx = 0;
-    // for (size_t i = 0; i < headerInfo.dim[1]; ++i) {
-    //     for (size_t j = 0; j < headerInfo.dim[0]; ++j) {
-    //         reshaped_data[i][j] = data[idx++];
-    //     }
-    // }
+    
 
-    // // Further reshape data to (dim[1], ntx, nt)
-    // data2.resize(headerInfo.dim[1], std::vector<std::vector<int16_t>>(nt, std::vector<int16_t>(ntx)));
-    // for (size_t i = 0; i < headerInfo.dim[1]; ++i) {
-    //     for (int j = 0; j < nt; ++j) {
-    //         for (int k = 0; k < ntx; ++k) {
-    //             data2[i][j][k] = reshaped_data[i][k * nt + j];
-    //         }
-    //     }
-    // }
 
-    // data3.resize(headerInfo.dim[1], std::vector<std::vector<int16_t>>(ntx, std::vector<int16_t>(nt)));
-    // for (size_t i = 0; i < headerInfo.dim[1]; ++i) {
-    //     for (int j = 0; j < ntx*nt; ++j) {
-    //             data3[i][j] = reshaped_data[i][j];
-    //     }
-    // }
 
     if (verbose) {
         std::cout << "Header Info:" << std::endl;
@@ -140,6 +120,98 @@ std::vector<std::vector<std::vector<int16_t>>> load_vrs(const std::string& fileN
     }
 
     return data2;
+}
+
+
+torch::Tensor load_vrs_torch(const std::string& fileName, int nt, int ntx = 28, bool verbose = false) {
+    HeaderInfo headerInfo;
+
+    std::ifstream file_obj(fileName, std::ios::binary);
+    if (!file_obj.is_open()) {
+        std::cerr << "Error opening file!" << std::endl;
+        return torch::Tensor();
+    }
+
+    // Read Version (uint16)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.version), 3);
+    
+    // Read Compression (uint8)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.compression), 1);
+    
+    // Read Timetag flag (uint8)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.timetagflag), 1);
+    
+
+    if (headerInfo.timetagflag == 1) {
+        // Read time tag (6 bytes: Sec, Min, Hour, Day, Month, Year)
+        headerInfo.time_tag.resize(6);
+        file_obj.read(reinterpret_cast<char*>(headerInfo.time_tag.data()), 6);
+    }
+    
+    
+    // Read studyidlength (uint64)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.studyidlength), 8);
+    
+    headerInfo.studyid.resize(headerInfo.studyidlength);
+    file_obj.read(&headerInfo.studyid[0], headerInfo.studyidlength);
+    
+    // Read sampleidlength (uint64)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.sampleidlength), 8);
+    headerInfo.sampleid.resize(headerInfo.sampleidlength);
+    file_obj.read(&headerInfo.sampleid[0], headerInfo.sampleidlength);
+    
+    
+    // Read commentlength (uint64)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.commentlength), 8);
+    headerInfo.comment.resize(headerInfo.commentlength);
+    file_obj.read(&headerInfo.comment[0], headerInfo.commentlength);
+    
+    
+    // Read dim (4 uint64 values)
+    headerInfo.dim.resize(4);
+    file_obj.read(reinterpret_cast<char*>(headerInfo.dim.data()), 32);
+    
+    
+    // Read numdatapoints (uint64)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.numdatapoints), 8);
+    
+    
+    // Read datatypes (uint8)
+    file_obj.read(reinterpret_cast<char*>(&headerInfo.datatypes), 1);
+
+    // Read data (numdatapoints * 2 bytes for int16)
+    std::vector<int16_t> raw_data(headerInfo.numdatapoints);
+    file_obj.read(reinterpret_cast<char*>(raw_data.data()), headerInfo.numdatapoints * 2);
+
+    // Now we will reshape the data into a 3D tensor (256, ntx, nt)
+    // First, flatten the data into a 1D vector of floats (casting int16_t to float)
+    std::vector<float> flattened_data(raw_data.size());
+    std::transform(raw_data.begin(), raw_data.end(), flattened_data.begin(),
+                   [](int16_t val) { return static_cast<float>(val); });
+
+    // Create a tensor from the flattened data
+    torch::Tensor tensor = torch::from_blob(flattened_data.data(),
+                                            {256, ntx, nt}, torch::kFloat);
+
+    // Ensure the tensor is contiguous in memory
+    tensor = tensor.clone();
+
+    if (verbose) {
+        std::cout << "Header Info:" << std::endl;
+        std::cout << "Version: " << headerInfo.version << std::endl;
+        std::cout << "Compression: " << (int)headerInfo.compression << std::endl;
+        std::cout << "Timetag Flag: " << (int)headerInfo.timetagflag << std::endl;
+        std::cout << "Study ID: " << headerInfo.studyid << std::endl;
+        std::cout << "Sample ID: " << headerInfo.sampleid << std::endl;
+        std::cout << "Comment: " << headerInfo.comment << std::endl;
+        std::cout << "Dimensions: ";
+        for (auto& dim_val : headerInfo.dim) {
+            std::cout << dim_val << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    return tensor;
 }
 
 // int main(int argc, char* argv[]) {

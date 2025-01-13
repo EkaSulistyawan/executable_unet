@@ -1,8 +1,15 @@
 #ifndef VRS_LOADER_H
 #define VRS_LOADER_H
 
-#include <string>
+#include <iostream>
+#include <fstream>
 #include <vector>
+#include <string>
+#include <cstring>
+#include <stdint.h> // For uint8_t, uint16_t, etc.
+
+#include <torch/script.h> // For TorchScript
+#include <torch/torch.h> // For TorchScript
 
 // Struct to store the header info, update according to your structure
 struct HeaderInfo {
@@ -23,6 +30,6 @@ struct HeaderInfo {
 
 // Function prototype
 std::vector<std::vector<std::vector<int16_t>>> load_vrs(const std::string& fileName, int nt = 4096, int ntx = 28, bool verbose = false);
-
+torch::Tensor load_vrs_torch(const std::string& fileName, int nt, int ntx = 28, bool verbose = false);
 
 #endif // VRS_LOADER_H
