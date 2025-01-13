@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 project(executable_unet)
 
 # Define the paths as variables
-set(LIBTORCH_PATH "C:/Users/Eka/Documents/GitHub/libtorch/share/cmake/Torch") # always look for /libtorch/share/cmake/Torch
+set(LIBTORCH_PATH "C:/Users/Eka Sulistyawan/Documents/GitHub/libtorch/share/cmake/Torch") # always look for /libtorch/share/cmake/Torch
 set(OpenCV_DIR "C:/opencv/build")  # Adjust this path to where OpenCV is installed
 # set(EIGEN3_INCLUDE_DIR "C:/Users/Eka Sulistyawan/Documents/GitHub/cpptorch/eigen-3.4.0") # no need Eigen anymore
 # set(ANACONDA_TORCH_PATH "C:/Users/Eka Sulistyawan/anaconda3/Lib/site-packages/torch/share/cmake")

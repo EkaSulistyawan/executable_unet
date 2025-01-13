@@ -41,38 +41,38 @@
 //     return tensor;
 // }
 
-torch::Tensor convert_to_tensor(const std::vector<std::vector<std::vector<int16_t>>>& raw_data) {
-    // Calculate the total size of the flattened data
-    size_t total_size = 0;
-    for (const auto& slice : raw_data) {
-        for (const auto& row : slice) {
-            total_size += row.size();
-        }
-    }
+// torch::Tensor convert_to_tensor(const std::vector<std::vector<std::vector<int16_t>>>& raw_data) {
+//     // Calculate the total size of the flattened data
+//     size_t total_size = 0;
+//     for (const auto& slice : raw_data) {
+//         for (const auto& row : slice) {
+//             total_size += row.size();
+//         }
+//     }
 
-    // Reserve space in a vector to store the flattened data
-    std::vector<float> flattened_data;
-    flattened_data.reserve(total_size);
+//     // Reserve space in a vector to store the flattened data
+//     std::vector<float> flattened_data;
+//     flattened_data.reserve(total_size);
 
-    // Flatten the 3D vector into a 1D vector of float (casting int16_t to float)
-    for (const auto& slice : raw_data) {
-        for (const auto& row : slice) {
-            flattened_data.insert(flattened_data.end(), row.begin(), row.end());
-        }
-    }
+//     // Flatten the 3D vector into a 1D vector of float (casting int16_t to float)
+//     for (const auto& slice : raw_data) {
+//         for (const auto& row : slice) {
+//             flattened_data.insert(flattened_data.end(), row.begin(), row.end());
+//         }
+//     }
 
-    // Convert the flattened vector directly to a torch tensor
-    torch::Tensor tensor = torch::from_blob(flattened_data.data(),
-        {static_cast<int64_t>(raw_data.size()), 
-         static_cast<int64_t>(raw_data[0].size()), 
-         static_cast<int64_t>(raw_data[0][0].size())},
-        torch::kFloat);
+//     // Convert the flattened vector directly to a torch tensor
+//     torch::Tensor tensor = torch::from_blob(flattened_data.data(),
+//         {static_cast<int64_t>(raw_data.size()), 
+//          static_cast<int64_t>(raw_data[0].size()), 
+//          static_cast<int64_t>(raw_data[0][0].size())},
+//         torch::kFloat);
 
-    // Ensure the tensor is contiguous in memory
-    tensor = tensor.clone();
+//     // Ensure the tensor is contiguous in memory
+//     tensor = tensor.clone();
     
-    return tensor;
-}
+//     return tensor;
+// }
 
 std::string getLatestFile(const std::string& folderPath) {
     std::string latestFile;
@@ -141,26 +141,25 @@ int main(int argc, char* argv[]) {
     std::cout << "PyTorch Version: " << TORCH_VERSION << std::endl;
     std::cout << "Loading Model ..." << std::endl;
     torch::jit::script::Module model = torch::jit::load(model_path);
+
+    if (torch::cuda::is_available()){
+        model.to(torch::kCUDA);
+    }
+
     cv::namedWindow("Tensor Image", cv::WINDOW_NORMAL);
     cv::resizeWindow("Tensor Image", 200, 200);
 
     /////////////////////////////////////////////////////////////////////////// load vrs
     while (true){
+        start = std::chrono::high_resolution_clock::now();
         // try to load the data
+
         torch::Tensor tensor;
-        try{
-            std::string fileName = getLatestFile(pathName);
-            std::cout << "Loading Data ..." << fileName << std::endl;
-
-            start = std::chrono::high_resolution_clock::now();
-            tensor = load_vrs_torch(fileName, nt, ntx, verbose);
-            end = std::chrono::high_resolution_clock::now();
-            elapsed = end - start;
-            std::cout << "Elapsed time: " << elapsed.count() << " seconds" << std::endl;
-
-        }catch(...){
-            std::cout << "Loading data failed, use all zeros" << std::endl;
-            tensor = torch::zeros({256,ntx,nt});
+        std::string fileName = getLatestFile(pathName);
+        verbose ? std::cout << "Loading Data ..." << fileName << std::endl : void();
+        tensor = load_vrs_torch(fileName, nt, ntx, verbose);
+        if (torch::cuda::is_available()){
+            tensor = tensor.to(torch::kCUDA);
         }
 
         // get one slice
@@ -180,7 +179,7 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout <<"Sizes : " << demo.sizes() << std::endl: void();
 
         ///////////////////////////////////////////////////////////////////////// Interpolation 
-        std::cout << "Bilinear interpolation ..." << std::endl;
+        verbose ? std::cout << "Bilinear interpolation ..." << std::endl : void();
         torch::Tensor interpolated_tensor = torch::nn::functional::interpolate(
             demo,
             torch::nn::functional::InterpolateFuncOptions()
@@ -193,7 +192,7 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout << "after interpolation" << std::endl : void();
 
         ///////////////////////////////////////////////////////////////////////// Inference
-        std::cout << "Inference ..." << std::endl;
+        verbose ? std::cout << "Inference ..." << std::endl : void();
         // Run the model on the input tensor
         interpolated_tensor = interpolated_tensor / interpolated_tensor.max();
         at::Tensor output = model.forward({interpolated_tensor}).toTensor();
@@ -205,23 +204,35 @@ int main(int argc, char* argv[]) {
         auto sizes = output.sizes();
 
         ///////////////////////////////////////////////////////////////////////// beamforming
-        std::cout << "Beamforming ..." << std::endl;
+        verbose ? std::cout << "Beamforming ..." << std::endl : void();
 
         auto module = torch::jit::load(distpath);
         torch::Tensor distmat = module.attr("tensor").toTensor();
+        if (torch::cuda::is_available()){
+            distmat = distmat.to(torch::kCUDA);
+        }
 
         distmat = torch::transpose(distmat,1,0).to(torch::kLong);
-        verbose ? std::cout << distmat.size(0) << " " << distmat.size(1) << std::endl: void();
+        verbose ? std::cout << distmat.size(0) << " " << distmat.size(1) << std::endl : void();
 
         torch::Tensor gathered = torch::gather(output, 1, distmat);  // Gather along columns
         torch::Tensor summed = gathered.sum(0);  // Shape will be (511,)
         torch::Tensor beamformed = -summed.view({imsz,imsz});
-        beamformed = (beamformed - beamformed.min()) / (beamformed.max() - beamformed.min());
+        try{
+            // catch if all beamform is zero 
+            beamformed = (beamformed - beamformed.min()) / (beamformed.max() - beamformed.min());
+        }catch(...){
+            beamformed = beamformed;
+        }
         beamformed = beamformed.to(torch::kCPU).contiguous();
         verbose ? std::cout << beamformed.sizes() << std::endl: void();
 
+        end = std::chrono::high_resolution_clock::now();
+        elapsed = end - start;
+        std::cout << "Elapsed time: " << elapsed.count() << " seconds" << std::endl;
+
         ///////////////////////////////////////////////////////////////////////// visualize 
-        std::cout << "View ..." << std::endl;
+        verbose ? std::cout << "View ..." << std::endl : void();
         cv::Mat image(beamformed.size(0), beamformed.size(1), CV_32F, beamformed.data_ptr<float>());
         // cv::Mat image(result.rows(), result.cols(), CV_64F, result.data()); // Use double (CV_64F) for Eigen::MatrixXd
         cv::Mat displaySlice;
@@ -236,6 +247,7 @@ int main(int argc, char* argv[]) {
         cv::waitKey(10); // Wait for a key press before closing the window
 
         std::this_thread::sleep_for(std::chrono::microseconds(1));
+        
     }
     return 0;
 }

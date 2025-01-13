@@ -122,14 +122,13 @@ std::vector<std::vector<std::vector<int16_t>>> load_vrs(const std::string& fileN
     return data2;
 }
 
-
 torch::Tensor load_vrs_torch(const std::string& fileName, int nt, int ntx = 28, bool verbose = false) {
     HeaderInfo headerInfo;
 
     std::ifstream file_obj(fileName, std::ios::binary);
     if (!file_obj.is_open()) {
         std::cerr << "Error opening file!" << std::endl;
-        return torch::Tensor();
+        return torch::zeros({256,ntx,nt});
     }
 
     // Read Version (uint16)
