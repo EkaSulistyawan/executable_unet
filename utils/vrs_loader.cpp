@@ -96,7 +96,7 @@ std::vector<std::vector<std::vector<int16_t>>> load_vrs(const std::string& fileN
             }
         }
     }
-    std::cout << idx << " " << headerInfo.numdatapoints << std::endl;
+    // std::cout << idx << " " << headerInfo.numdatapoints << std::endl;
 
     // // Reshape data (dim[1], dim[0])
     // std::vector<std::vector<int16_t>> reshaped_data(headerInfo.dim[1], std::vector<int16_t>(headerInfo.dim[0]));
