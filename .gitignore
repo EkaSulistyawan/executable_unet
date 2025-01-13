@@ -1,5 +1,7 @@
 /build/*
-/utils/pre_computed_distance/*
+/data/*
+
+.history
 
 *.vrs
 *.pt
