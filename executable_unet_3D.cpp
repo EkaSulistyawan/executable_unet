@@ -1,3 +1,13 @@
+/**
+ * @file executable_unet.cpp
+ * @author sulis347@gmail.com
+ * @brief this is 3D reconstruction
+ * @version 0.1
+ * @date 2025-01-14
+ * 
+ * @copyright Copyright (c) 2025
+ * 
+ */
 #include <iostream>
 #include <memory>
 #include <stdexcept>  // for std::exception>
@@ -70,10 +80,12 @@ int main(int argc, char* argv[]) {
     int dim3_start = reader.GetInteger("general", "dim3_start", 1144);
     int dim3_stop = reader.GetInteger("general", "dim3_stop", 1400);
     int imsz = reader.GetInteger("general", "imsz", 128);
+    int depth_points = reader.GetInteger("general", "depth_points", 10);
     int idx = reader.GetInteger("general", "slice", 50);
+    double Fs = reader.GetReal("general", "Fs", 50);
     std::string model_path = reader.Get("general", "model_path", "../../model_traced.pt");
     std::string pathName = reader.Get("general", "pathName", "../../");
-    std::string distpath = reader.Get("general", "distpath", "../../utils/pre_computed_distance/c1475_x0.00.pt");
+    std::string distpath = reader.Get("general", "distpath", "../../utils/pre_computed_distance/c1475_3D.pt");
 
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
@@ -97,8 +109,11 @@ int main(int argc, char* argv[]) {
     distmat = torch::transpose(distmat,1,0).to(torch::kLong);
     verbose ? std::cout << distmat.size(0) << " " << distmat.size(1) << std::endl : void();
 
-    cv::namedWindow("Tensor Image", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Tensor Image", 400, 400);
+    cv::namedWindow("MIP", cv::WINDOW_NORMAL);
+    cv::resizeWindow("MIP", 400, 400);
+
+    cv::namedWindow("Depth Image", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Depth Image", 400, 400);
 
     /////////////////////////////////////////////////////////////////////////// load vrs
     while (true){
@@ -156,7 +171,7 @@ int main(int argc, char* argv[]) {
 
         torch::Tensor gathered = torch::gather(output, 1, distmat);  // Gather along columns
         torch::Tensor summed = gathered.sum(0);  // Shape will be (511,)
-        torch::Tensor beamformed = -summed.view({imsz,imsz});
+        torch::Tensor beamformed = -summed.view({imsz,imsz,depth_points});
         try{
             // catch if all beamform is zero 
             beamformed = (beamformed - beamformed.min()) / (beamformed.max() - beamformed.min());
@@ -164,6 +179,11 @@ int main(int argc, char* argv[]) {
             beamformed = beamformed;
         }
         beamformed = beamformed.to(torch::kCPU).contiguous();
+
+        // maybe not max
+        auto [max_values, indices] = beamformed.max(2);
+        indices = indices.to(torch::kFloat);
+        indices = indices / depth_points;
         
         ///////////////////////////////////////////////////////////////////////// time 
         end = std::chrono::high_resolution_clock::now();
@@ -172,17 +192,35 @@ int main(int argc, char* argv[]) {
 
         ///////////////////////////////////////////////////////////////////////// visualize 
         verbose ? std::cout << "View ..." << std::endl : void();
-        cv::Mat image(beamformed.size(0), beamformed.size(1), CV_32F, beamformed.data_ptr<float>());
-        // cv::Mat image(result.rows(), result.cols(), CV_64F, result.data()); // Use double (CV_64F) for Eigen::MatrixXd
+        cv::Mat image(max_values.size(0), max_values.size(1), CV_32F, max_values.data_ptr<float>());
         cv::Mat displaySlice;
-        image.convertTo(displaySlice, CV_8U, 255.0); // Scale from [0, 1] to [0, 255
-
-        // // Step 5: Display the image using OpenCV
+        image.convertTo(displaySlice, CV_8U, 255.0); 
         cv::Mat colorMapped;
         cv::applyColorMap(displaySlice, colorMapped, cv::COLORMAP_HOT);
         cv::Mat rotatedImage;
         cv::rotate(colorMapped, rotatedImage, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::imshow("Tensor Image", rotatedImage);
+        cv::imshow("MIP", rotatedImage);
+
+        ////////////////////// show depth
+        verbose ? std::cout << indices.sizes() << std::endl : void();
+        
+        cv::Mat depthimage(indices.size(0), indices.size(1), CV_32F, indices.data_ptr<float>());
+        verbose ? std::cout << "Flag" << std::endl : void();
+        cv::Mat displaySlice2;
+        verbose ? std::cout << "Flag" << std::endl : void();
+        depthimage.convertTo(displaySlice2, CV_8U, 255.0); 
+        verbose ? std::cout << "Flag" << std::endl : void();
+        // cv::Mat colorMapped2;
+        verbose ? std::cout << "Flag" << std::endl : void();
+        // cv::applyColorMap(displaySlice2, colorMapped2, cv::COLORMAP_GREY);
+        verbose ? std::cout << "Flag" << std::endl : void();
+        cv::Mat rotatedImage2;
+        verbose ? std::cout << "Flag" << std::endl : void();
+        cv::rotate(displaySlice2, rotatedImage2, cv::ROTATE_90_COUNTERCLOCKWISE);
+        verbose ? std::cout << "Flag" << std::endl : void();
+        cv::imshow("Depth Image", rotatedImage2);
+        verbose ? std::cout << "Flag" << std::endl : void();
+
         cv::waitKey(10); // Wait for a key press before closing the window
 
         std::this_thread::sleep_for(std::chrono::microseconds(1));
