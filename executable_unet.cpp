@@ -1,7 +1,7 @@
 /**
  * @file executable_unet_2D.cpp
  * @author sulis347@gmail.com
- * @brief this is 2D reconstruction + envelope
+ * @brief this is 3D reconstruction + envelope
  * @version 0.1
  * @date 2025-01-14
  * 
@@ -21,6 +21,7 @@
 #include <opencv2/opencv.hpp>
 #include <torch/script.h> // For TorchScript
 #include <torch/torch.h> // For TorchScript
+#include <torch/fft.h> 
 
 // custom
 #include "utils/vrs_loader.h"
@@ -54,20 +55,35 @@ std::string getLatestFile(const std::string& folderPath) {
     return latestFile;
 }
 
+
+cv::Mat applyColormapWithIntensity(const torch::Tensor& depth_normalized, const torch::Tensor& intensity_normalized) {
+    // Convert tensors to CPU for OpenCV
+    auto depth_normalized_cpu = depth_normalized.to(torch::kCPU);
+    auto intensity_normalized_cpu = intensity_normalized.to(torch::kCPU);
+
+    // Convert tensors to OpenCV Mat
+    cv::Mat depth_normalized_cv(depth_normalized_cpu.size(0), depth_normalized_cpu.size(1), CV_32F, depth_normalized_cpu.data_ptr());
+    cv::Mat intensity_normalized_cv(intensity_normalized_cpu.size(0), intensity_normalized_cpu.size(1), CV_32F, intensity_normalized_cpu.data_ptr());
+
+    // Convert to 8-bit for colormap application
+    depth_normalized_cv.convertTo(depth_normalized_cv, CV_8U, 255); // Scale to [0, 255]
+    intensity_normalized_cv.convertTo(intensity_normalized_cv, CV_8U, 255); // Scale to [0, 255]
+
+    // Apply the 'inferno' colormap
+    cv::Mat depth_colored;
+    cv::applyColorMap(depth_normalized_cv, depth_colored, cv::COLORMAP_INFERNO);
+
+    // Scale the colormap by intensity
+    cv::Mat intensity_normalized_color;
+    cv::cvtColor(intensity_normalized_cv, intensity_normalized_color, cv::COLOR_GRAY2BGR); // Convert grayscale to 3 channels
+    cv::Mat final_colored;
+    cv::multiply(depth_colored, intensity_normalized_color, final_colored, 1.0 / 255.0); // Element-wise scaling
+
+    return final_colored;
+}
+
 int main(int argc, char* argv[]) {
-    /////////////////////////////////////////////////////////////////////////// important parameters
-    // int nt          = 3072;  // Default 4096 if not provided
-    // int ntx         = 58;  // Default 28 if not provided
-    // bool verbose    = false;  // Default false if not provided
-    // // int dim1_start  = 0;
-    // // int dim1_stop   = 256;
-    // int dim3_start  = 1144;
-    // int dim3_stop   = 1400;
-    // int imsz        = 128;
-    // std::string model_path = "../../model_traced.pt";
-    // std::string fileName   = "../../22102024.vrs";
-    // std::string distpath = "../../utils/pre_computed_distance/c1475_z-0.40.pt";
-    
+
     INIReader reader(argv[1]);
     if (reader.ParseError() < 0) {
         std::cout << "Can't load 'config.ini'\n";
@@ -82,16 +98,16 @@ int main(int argc, char* argv[]) {
     int imsz = reader.GetInteger("general", "imsz", 128);
     int idx   = reader.GetInteger("general", "slice", 50);
     int idxUS = reader.GetInteger("general", "sliceUS", 1);
+    int slice3dup = reader.GetInteger("general", "slice3dup", 0);
+    int slice3ddown = reader.GetInteger("general", "slice3ddown", 64);
     double c     = reader.GetReal("general", "cwater", 1475);
     double Fs  = reader.GetReal("general", "Fs", 62.5e6);
     double rs  = reader.GetReal("general", "rs", 1.5); // in mm
     int sleepdur = reader.GetInteger("general", "sleep_duration", 10);
     std::string model_path = reader.Get("general", "model_path", "../../model_traced.pt");
     std::string pathName = reader.Get("general", "pathName", "../../");
-    std::string distpathx = reader.Get("general", "distpathx", "../../utils/pre_computed_distance/c1475_x0.00.pt");
-    std::string distpathy = reader.Get("general", "distpathy", "../../utils/pre_computed_distance/c1475_y0.00.pt");
-    std::string distpathz = reader.Get("general", "distpathz", "../../utils/pre_computed_distance/c1475_z0.00.pt");
-
+    std::string distpath3d = reader.Get("general", "distpath3d", "../../utils/pre_computed_distance/c1475_3D_64.pt");
+    
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
@@ -107,27 +123,13 @@ int main(int argc, char* argv[]) {
         std::cout << "CUDA exist" << std::endl;
     }
     /////////////////////////////////////////////////////////////////////////// load distance matrix
-    auto modulex = torch::jit::load(distpathx);
-    auto moduley = torch::jit::load(distpathy);
-    auto modulez = torch::jit::load(distpathz);
-
-    torch::Tensor distmatx = modulex.attr("tensor").toTensor();
-    torch::Tensor distmaty = moduley.attr("tensor").toTensor();
-    torch::Tensor distmatz = modulez.attr("tensor").toTensor();
-
+    auto module3d = torch::jit::load(distpath3d);
+    torch::Tensor distmat3d = module3d.attr("tensor").toTensor();
     if (torch::cuda::is_available()){
-        distmatx = distmatx.to(torch::kCUDA);
-        distmaty = distmaty.to(torch::kCUDA);
-        distmatz = distmatz.to(torch::kCUDA);
+        distmat3d = distmat3d.to(torch::kCUDA);
     }
-    distmatx = torch::transpose(distmatx,1,0).to(torch::kLong);
-    distmaty = torch::transpose(distmaty,1,0).to(torch::kLong);
-    distmatz = torch::transpose(distmatz,1,0).to(torch::kLong);
-    
-    verbose ? std::cout << distmatx.size(0) << " " << distmatx.size(1) << std::endl : void();
-    verbose ? std::cout << distmaty.size(0) << " " << distmaty.size(1) << std::endl : void();
-    verbose ? std::cout << distmatz.size(0) << " " << distmatz.size(1) << std::endl : void();
-
+    distmat3d = torch::transpose(distmat3d,1,0).to(torch::kLong);
+    verbose ? std::cout << distmat3d.sizes() << std::endl : void();
 
     cv::namedWindow("XY", cv::WINDOW_NORMAL);
     cv::resizeWindow("XY", 400, 400);
@@ -179,7 +181,12 @@ int main(int argc, char* argv[]) {
 
         torch::Tensor demo = tensor.permute({0,2,1,3});
         verbose ? std::cout <<"Sizes : " << demo.sizes() << std::endl: void();
-
+        ///////////////////////////////////////////////////////////////////////// fkfilter
+        // demo = demo.squeeze(0).squeeze(0);
+        // torch::Tensor fftval2 = (torch::fft::fft2(demo));
+        // fftval2.narrow(0, 0, 1).zero_(); // remove the central frequency
+        // demo = torch::real(torch::fft::ifft2(fftval2));
+        // demo = demo.unsqueeze(0).unsqueeze(0);
         ///////////////////////////////////////////////////////////////////////// Interpolation 
         verbose ? std::cout << "Bilinear interpolation ..." << std::endl : void();
         torch::Tensor interpolated_tensor = torch::nn::functional::interpolate(
@@ -202,30 +209,26 @@ int main(int argc, char* argv[]) {
         output_raw = output_raw.narrow(0, 0, output_raw.size(0) - 1); // removes last row
 
         ///////////////////////////////////////////////////////////////////////// beamforming
+
         /// hilbert transform
         torch::Tensor fftval = torch::fft::fft(output_raw); // by default along last dimension
         fftval.narrow(1, 128, 128).zero_(); // Zero out the negative frequencies (right half)
         torch::Tensor output = torch::fft::ifft(fftval);
-        verbose ? std::cout << "Beamforming ..." << std::endl : void();
 
 
         verbose ? std::cout << "Beamforming ..." << std::endl : void();
 
-        torch::Tensor gatheredx = torch::gather(output, 1, distmatx);  // Gather along columns
-        torch::Tensor gatheredy = torch::gather(output, 1, distmaty);  // Gather along columns
-        torch::Tensor gatheredz = torch::gather(output, 1, distmatz);  // Gather along columns
+        torch::Tensor gathered3d = torch::gather(output, 1, distmat3d);  // Gather along columns
         
-        torch::Tensor summedx = gatheredx.sum(0);  // Shape will be (511,)
-        torch::Tensor summedy = gatheredy.sum(0);  // Shape will be (511,)
-        torch::Tensor summedz = gatheredz.sum(0);  // Shape will be (511,)
+        torch::Tensor summed3d = gathered3d.sum(0);  // Shape will be (511,)
 
-        torch::Tensor beamformedx = summedx.view({imsz,imsz});
-        torch::Tensor beamformedy = summedy.view({imsz,imsz});
-        torch::Tensor beamformedz = summedz.view({imsz,imsz});
+        torch::Tensor beamformed3d = summed3d.view({imsz,imsz,imsz});
 
-        beamformedx = beamformedx.abs();
-        beamformedy = beamformedy.abs();
-        beamformedz = beamformedz.abs();
+        beamformed3d = beamformed3d.abs();
+
+        torch::Tensor beamformedx = beamformed3d.index({imsz/2, torch::indexing::Slice(), torch::indexing::Slice()});
+        torch::Tensor beamformedy = beamformed3d.index({torch::indexing::Slice(), imsz/2, torch::indexing::Slice()});
+        torch::Tensor beamformedz = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), imsz/2});
 
         try{
             // catch if all beamform is zero 
@@ -250,7 +253,7 @@ int main(int argc, char* argv[]) {
         // compute depth
         int depth_idx = std::floor(depth / (2.0 * rs / double(imsz)));
         verbose ? std::cout << depth_idx << std::endl : void();
-        int depth_cv = 64 - depth_idx;
+        int depth_cv = imsz/2 - depth_idx;
         verbose ? std::cout << depth_cv << std::endl : void();
         if (depth_cv < 0){
             depth_cv = 0;
@@ -281,14 +284,14 @@ int main(int argc, char* argv[]) {
         cv::line(rotatedImagey, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 255, 0), 1);  // Black lines with thickness 2
         cv::imshow("XZ", rotatedImagey);
 
-        cv::Mat imagez(beamformedz.size(0), beamformedz.size(1), CV_32F, beamformedz.data_ptr<float>());
-        cv::Mat displaySlicez;
-        imagez.convertTo(displaySlicez, CV_8U, 255.0);
-        cv::Mat colorMappedz;
-        cv::applyColorMap(displaySlicez, colorMappedz, cv::COLORMAP_HOT);
-        cv::Mat rotatedImagez;
-        cv::rotate(colorMappedz, rotatedImagez, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::imshow("XY", rotatedImagez);
+        // cv::Mat imagez(beamformedz.size(0), beamformedz.size(1), CV_32F, beamformedz.data_ptr<float>());
+        // cv::Mat displaySlicez;
+        // imagez.convertTo(displaySlicez, CV_8U, 255.0);
+        // cv::Mat colorMappedz;
+        // cv::applyColorMap(displaySlicez, colorMappedz, cv::COLORMAP_HOT);
+        // cv::Mat rotatedImagez;
+        // cv::rotate(colorMappedz, rotatedImagez, cv::ROTATE_90_COUNTERCLOCKWISE);
+        // cv::imshow("XY", rotatedImagez);
 
         torch::Tensor view_raw = output_raw.to(torch::kCPU).contiguous();
         view_raw = (view_raw - view_raw.min()) / (view_raw.max() - view_raw.min());
@@ -296,6 +299,18 @@ int main(int argc, char* argv[]) {
         cv::Mat displayRaw;
         imageraw.convertTo(displayRaw, CV_8U, 255.0);
         cv::imshow("RAW", imageraw);
+
+        ////////////////////////// view 3D
+        // slice the beamformed3d
+        beamformed3d = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(slice3dup,slice3ddown)});
+        torch::Tensor depth_map = std::get<1>(torch::max(beamformed3d, 2)); // Argmax along depth axis
+        depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min());
+        torch::Tensor intensity_map = torch::amax(beamformed3d, 2); // Max along depth axis
+        intensity_map = (intensity_map - intensity_map.min()) / (intensity_map.max() - intensity_map.min());
+        cv::Mat final_colored = applyColormapWithIntensity(depth_map, intensity_map);
+        cv::Mat rotatedImage3d;
+        cv::rotate(final_colored, rotatedImage3d, cv::ROTATE_90_COUNTERCLOCKWISE);
+        cv::imshow("XY", rotatedImage3d);
 
         cv::waitKey(10);
 

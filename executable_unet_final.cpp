@@ -1,7 +1,7 @@
 /**
  * @file executable_unet_2D.cpp
  * @author sulis347@gmail.com
- * @brief this is 2D reconstruction
+ * @brief this is 2D reconstruction + envelope
  * @version 0.1
  * @date 2025-01-14
  * 
@@ -21,6 +21,7 @@
 #include <opencv2/opencv.hpp>
 #include <torch/script.h> // For TorchScript
 #include <torch/torch.h> // For TorchScript
+#include <torch/fft.h> 
 
 // custom
 #include "utils/vrs_loader.h"
@@ -104,6 +105,7 @@ int main(int argc, char* argv[]) {
 
     if (torch::cuda::is_available()){
         model.to(torch::kCUDA);
+        std::cout << "CUDA exist" << std::endl;
     }
     /////////////////////////////////////////////////////////////////////////// load distance matrix
     auto modulex = torch::jit::load(distpathx);
@@ -134,6 +136,9 @@ int main(int argc, char* argv[]) {
     cv::resizeWindow("XZ", 400, 400);
     cv::namedWindow("YZ", cv::WINDOW_NORMAL);
     cv::resizeWindow("YZ", 400, 400);
+
+    cv::namedWindow("RAW", cv::WINDOW_NORMAL);
+    cv::resizeWindow("RAW", 200, 400);
 
     /////////////////////////////////////////////////////////////////////////// load vrs
     while (true){
@@ -175,7 +180,12 @@ int main(int argc, char* argv[]) {
 
         torch::Tensor demo = tensor.permute({0,2,1,3});
         verbose ? std::cout <<"Sizes : " << demo.sizes() << std::endl: void();
-
+        ///////////////////////////////////////////////////////////////////////// fkfilter
+        // demo = demo.squeeze(0).squeeze(0);
+        // torch::Tensor fftval2 = (torch::fft::fft2(demo));
+        // fftval2.narrow(0, 0, 1).zero_(); // remove the central frequency
+        // demo = torch::real(torch::fft::ifft2(fftval2));
+        // demo = demo.unsqueeze(0).unsqueeze(0);
         ///////////////////////////////////////////////////////////////////////// Interpolation 
         verbose ? std::cout << "Bilinear interpolation ..." << std::endl : void();
         torch::Tensor interpolated_tensor = torch::nn::functional::interpolate(
@@ -193,11 +203,19 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout << "Inference ..." << std::endl : void();
         // Run the model on the input tensor
         interpolated_tensor = interpolated_tensor / interpolated_tensor.max();
-        at::Tensor output = model.forward({interpolated_tensor}).toTensor();
-        output = output.squeeze();
-        output = output.narrow(0, 0, output.size(0) - 1); // removes last row
+        at::Tensor output_raw = model.forward({interpolated_tensor}).toTensor();
+        output_raw = output_raw.squeeze();
+        output_raw = output_raw.narrow(0, 0, output_raw.size(0) - 1); // removes last row
 
         ///////////////////////////////////////////////////////////////////////// beamforming
+
+        /// hilbert transform
+        torch::Tensor fftval = torch::fft::fft(output_raw); // by default along last dimension
+        fftval.narrow(1, 128, 128).zero_(); // Zero out the negative frequencies (right half)
+        torch::Tensor output = torch::fft::ifft(fftval);
+        verbose ? std::cout << "Beamforming ..." << std::endl : void();
+
+
         verbose ? std::cout << "Beamforming ..." << std::endl : void();
 
         torch::Tensor gatheredx = torch::gather(output, 1, distmatx);  // Gather along columns
@@ -208,9 +226,13 @@ int main(int argc, char* argv[]) {
         torch::Tensor summedy = gatheredy.sum(0);  // Shape will be (511,)
         torch::Tensor summedz = gatheredz.sum(0);  // Shape will be (511,)
 
-        torch::Tensor beamformedx = -summedx.view({imsz,imsz});
-        torch::Tensor beamformedy = -summedy.view({imsz,imsz});
-        torch::Tensor beamformedz = -summedz.view({imsz,imsz});
+        torch::Tensor beamformedx = summedx.view({imsz,imsz});
+        torch::Tensor beamformedy = summedy.view({imsz,imsz});
+        torch::Tensor beamformedz = summedz.view({imsz,imsz});
+
+        beamformedx = beamformedx.abs();
+        beamformedy = beamformedy.abs();
+        beamformedz = beamformedz.abs();
 
         try{
             // catch if all beamform is zero 
@@ -253,7 +275,7 @@ int main(int argc, char* argv[]) {
         cv::applyColorMap(displaySlicex, colorMappedx, cv::COLORMAP_HOT);
         cv::Mat rotatedImagex;
         cv::rotate(colorMappedx, rotatedImagex, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::line(rotatedImagex, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 0, 0), 1);  // Black lines with thickness 2
+        cv::line(rotatedImagex, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 255, 0), 1);  // Black lines with thickness 2
         cv::imshow("YZ", rotatedImagex);
 
         cv::Mat imagey(beamformedy.size(0), beamformedy.size(1), CV_32F, beamformedy.data_ptr<float>());
@@ -263,7 +285,7 @@ int main(int argc, char* argv[]) {
         cv::applyColorMap(displaySlicey, colorMappedy, cv::COLORMAP_HOT);
         cv::Mat rotatedImagey;
         cv::rotate(colorMappedy, rotatedImagey, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::line(rotatedImagey, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 0, 0), 1);  // Black lines with thickness 2
+        cv::line(rotatedImagey, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 255, 0), 1);  // Black lines with thickness 2
         cv::imshow("XZ", rotatedImagey);
 
         cv::Mat imagez(beamformedz.size(0), beamformedz.size(1), CV_32F, beamformedz.data_ptr<float>());
@@ -274,6 +296,13 @@ int main(int argc, char* argv[]) {
         cv::Mat rotatedImagez;
         cv::rotate(colorMappedz, rotatedImagez, cv::ROTATE_90_COUNTERCLOCKWISE);
         cv::imshow("XY", rotatedImagez);
+
+        torch::Tensor view_raw = output_raw.to(torch::kCPU).contiguous();
+        view_raw = (view_raw - view_raw.min()) / (view_raw.max() - view_raw.min());
+        cv::Mat imageraw(view_raw.size(0), view_raw.size(1), CV_32F, view_raw.data_ptr<float>());
+        cv::Mat displayRaw;
+        imageraw.convertTo(displayRaw, CV_8U, 255.0);
+        cv::imshow("RAW", imageraw);
 
         cv::waitKey(10);
 

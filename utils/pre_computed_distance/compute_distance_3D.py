@@ -8,7 +8,7 @@ start_time  = 1144 # PA
 end_time    = 1400 # PA
 Fc          = 15.625e6     # in hertz                       
 Fs          = 4*Fc 
-imsz        = 64
+imsz        = 96
 r           = 1.5  # in mm 
 cPA         = 1475 # in m #1475
 
@@ -22,7 +22,7 @@ def save_time_dist_PA(zidx,whichdim):
     rix, riy, riz = torch.meshgrid(
         torch.linspace(-r, r, imsz),
         torch.linspace(-r, r, imsz),
-        torch.linspace(-r, 0, imsz),
+        torch.linspace(-r, r, imsz),
         indexing='ij'
     )
 
@@ -34,10 +34,11 @@ def save_time_dist_PA(zidx,whichdim):
     # return time_points_distPA
 
     module = SaveTensor(time_points_distPA)
-    torch.jit.save(torch.jit.script(module),f"c{cPA}_3D_64_0mmbelow.pt")
+    torch.jit.save(torch.jit.script(module),f"c{cPA}_3D_96.pt")
 
 if __name__=="__main__":
     sensor_pos = torch.load("../../data/sensor_pos_interp.pt")
-    for i in np.linspace(-1.0, 1.0, 11):
-        for j in ['x','y','z']:
-            save_time_dist_PA(i,j)
+    save_time_dist_PA(0,0)
+    # for i in np.linspace(-1.0, 1.0, 11):
+    #     for j in ['x','y','z']:
+    #         save_time_dist_PA(i,j)
