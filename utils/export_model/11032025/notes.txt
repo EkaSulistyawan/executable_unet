@@ -1,0 +1,7 @@
+Training follow the script in paper_reconstruction: Paper1
+It will generate simulation from RapidGenerator
+
+You need to load the PSF instead of running the cell directly below the RapidGenerator
+
+
+

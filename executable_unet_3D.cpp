@@ -1,9 +1,9 @@
 /**
  * @file executable_unet_2D.cpp
  * @author sulis347@gmail.com
- * @brief this is 3D reconstruction + envelope + FK-filter + CF, and mip
+ * @brief this is 3D reconstruction + envelope
  * @version 0.1
- * @date 2025-01-20
+ * @date 2025-01-14
  * 
  * @copyright Copyright (c) 2025
  * 
@@ -53,33 +53,6 @@ std::string getLatestFile(const std::string& folderPath) {
     }
 
     return latestFile;
-}
-
-int getLatestFileIndex(const std::string& folderPath) {
-    std::string latestFile;
-    int maxIndex = -1;
-
-    // Regular expression to extract the number from filenames like TestFile000.vrs
-    std::regex filenamePattern("TestFile(\\d+).vrs");
-
-    // Iterate through all files in the folder
-    for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
-        const auto& filename = entry.path().filename().string();
-        
-        // Check if the filename matches the pattern
-        std::smatch match;
-        if (std::regex_match(filename, match, filenamePattern)) {
-            int index = std::stoi(match[1].str());  // Convert the matched number to integer
-
-            // Update the latest file if the current one has a larger index
-            if (index > maxIndex) {
-                maxIndex = index;
-                latestFile = entry.path().string();  // Get the full path
-            }
-        }
-    }
-
-    return maxIndex;
 }
 
 
@@ -163,14 +136,13 @@ int main(int argc, char* argv[]) {
     distmat3d = torch::transpose(distmat3d,1,0).to(torch::kLong);
     verbose ? std::cout << distmat3d.sizes() << std::endl : void();
 
+    cv::namedWindow("XY", cv::WINDOW_NORMAL);
+    cv::resizeWindow("XY", 400, 400);
     cv::namedWindow("XZ", cv::WINDOW_NORMAL);
     cv::resizeWindow("XZ", 400, 400);
     cv::namedWindow("YZ", cv::WINDOW_NORMAL);
     cv::resizeWindow("YZ", 400, 400);
-    cv::namedWindow("MIPZ", cv::WINDOW_NORMAL);
-    cv::resizeWindow("MIPZ", 400, 400);
-    cv::namedWindow("DEPTH", cv::WINDOW_NORMAL);
-    cv::resizeWindow("DEPTH", 400, 400);
+
     cv::namedWindow("RAW", cv::WINDOW_NORMAL);
     cv::resizeWindow("RAW", 200, 400);
 
@@ -181,15 +153,12 @@ int main(int argc, char* argv[]) {
 
         torch::Tensor tensor;
         std::string fileName;
-        int fileNameIndex;
 
         try{
             fileName = getLatestFile(pathName);
-            fileNameIndex = getLatestFileIndex(pathName);
             verbose ? std::cout << "Loading Data ..." << fileName << std::endl : void();
             tensor = load_vrs_torch(fileName, nt, ntx, verbose);
         }catch(...){
-            fileNameIndex = -1;
             verbose ? std::cout << "Loading error, set all zeros" << fileName << std::endl : void();
             tensor = torch::zeros({256,ntx,nt});
         }
@@ -226,26 +195,11 @@ int main(int argc, char* argv[]) {
         torch::Tensor demo = tensor.permute({0,2,1,3});
         verbose ? std::cout <<"Sizes : " << demo.sizes() << std::endl: void();
         ///////////////////////////////////////////////////////////////////////// fkfilter
-        demo = demo.squeeze(0).squeeze(0);
-        int quarter_size = demo.size(0) / 4;
-
-        for (int i = 0; i < 4; ++i) {
-            int start_row = i * quarter_size;
-            int end_row = (i + 1) * quarter_size;
-
-            // Slice the tensor for the current quarter
-            torch::Tensor quarter = demo.slice(0, start_row, end_row);
-
-            // FFT process on the quarter
-            torch::Tensor fftval2 = torch::fft::fft2(quarter);
-            fftval2.narrow(0, 0, 1).zero_(); // Remove the central frequency
-            quarter = torch::real(torch::fft::ifft2(fftval2));
-
-            // Assign the processed quarter back to the original tensor
-            demo.slice(0, start_row, end_row).copy_(quarter);
-        }
-        demo = demo.unsqueeze(0).unsqueeze(0);
-
+        // demo = demo.squeeze(0).squeeze(0);
+        // torch::Tensor fftval2 = (torch::fft::fft2(demo));
+        // fftval2.narrow(0, 0, 1).zero_(); // remove the central frequency
+        // demo = torch::real(torch::fft::ifft2(fftval2));
+        // demo = demo.unsqueeze(0).unsqueeze(0);
         ///////////////////////////////////////////////////////////////////////// Interpolation 
         verbose ? std::cout << "Bilinear interpolation ..." << std::endl : void();
         torch::Tensor interpolated_tensor = torch::nn::functional::interpolate(
@@ -279,38 +233,29 @@ int main(int argc, char* argv[]) {
 
         torch::Tensor gathered3d = torch::gather(output, 1, distmat3d);  // Gather along columns
         
-        torch::Tensor summed3d      = gathered3d.sum(0);  // Shape will be (511,)
-        torch::Tensor summed3dabs   = gathered3d.abs().sum(0);  // Shape will be (511,)
+        torch::Tensor summed3d = gathered3d.sum(0);  // Shape will be (511,)
 
-        gathered3d.reset();
-
-        torch::Tensor beamformed3d      = summed3d.view({imsz,imsz,imsz});
-        torch::Tensor beamformed3dabs   = summed3dabs.view({imsz,imsz,imsz});
+        torch::Tensor beamformed3d = summed3d.view({imsz,imsz,imsz});
 
         beamformed3d = beamformed3d.abs();
-        beamformed3d = beamformed3d * beamformed3d * beamformed3d / (511 * beamformed3dabs);
 
         torch::Tensor beamformedx = beamformed3d.index({imsz/2, torch::indexing::Slice(), torch::indexing::Slice()});
         torch::Tensor beamformedy = beamformed3d.index({torch::indexing::Slice(), imsz/2, torch::indexing::Slice()});
-        // torch::Tensor beamformedz = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), imsz/2});
-        torch::Tensor mipz = std::get<0>(beamformed3d.max(2)); // dim 2 corresponds to z-dimension
+        torch::Tensor beamformedz = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), imsz/2});
 
         try{
             // catch if all beamform is zero 
             beamformedx = (beamformedx - beamformedx.min()) / (beamformedx.max() - beamformedx.min());
             beamformedy = (beamformedy - beamformedy.min()) / (beamformedy.max() - beamformedy.min());
-            // beamformedz = (beamformedz - beamformedz.min()) / (beamformedz.max() - beamformedz.min());
-            mipz = (mipz - mipz.min()) / (mipz.max() - mipz.min());
+            beamformedz = (beamformedz - beamformedz.min()) / (beamformedz.max() - beamformedz.min());
         }catch(...){
             beamformedx = beamformedx;
             beamformedy = beamformedy;
-            // beamformedz = beamformedz;
-            mipz = mipz;
+            beamformedz = beamformedz;
         }
         beamformedx = beamformedx.to(torch::kCPU).contiguous();
         beamformedy = beamformedy.to(torch::kCPU).contiguous();
-        // beamformedz = beamformedz.to(torch::kCPU).contiguous();
-        mipz = mipz.to(torch::kCPU).contiguous();
+        beamformedz = beamformedz.to(torch::kCPU).contiguous();
         
         ///////////////////////////////////////////////////////////////////////// time 
         end = std::chrono::high_resolution_clock::now();
@@ -352,22 +297,14 @@ int main(int argc, char* argv[]) {
         cv::line(rotatedImagey, cv::Point(0, depth_cv), cv::Point(rotatedImagex.cols, depth_cv), cv::Scalar(0, 255, 0), 1);  // Black lines with thickness 2
         cv::imshow("XZ", rotatedImagey);
 
-        cv::Mat imagez(mipz.size(0), mipz.size(1), CV_32F, mipz.data_ptr<float>());
-        cv::Mat displaySlicez;
-        imagez.convertTo(displaySlicez, CV_8U, 255.0);
-        cv::Mat colorMappedz;
-        cv::applyColorMap(displaySlicez, colorMappedz, cv::COLORMAP_HOT);
-        cv::Mat rotatedImagez;
-        cv::rotate(colorMappedz, rotatedImagez, cv::ROTATE_90_COUNTERCLOCKWISE);
-        std::string text = std::to_string(fileNameIndex);
-        int imageHeight = rotatedImagez.rows;
-        cv::Point position(1, imageHeight-1); // 10px from left, 10px from bottom
-        int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-        double fontScale = 0.3;
-        cv::Scalar textColor(0, 255, 0);  // Green color
-        int thickness = 1;
-        cv::putText(rotatedImagez, text, position, fontFace, fontScale, textColor, thickness);
-        cv::imshow("MIPZ", rotatedImagez);
+        // cv::Mat imagez(beamformedz.size(0), beamformedz.size(1), CV_32F, beamformedz.data_ptr<float>());
+        // cv::Mat displaySlicez;
+        // imagez.convertTo(displaySlicez, CV_8U, 255.0);
+        // cv::Mat colorMappedz;
+        // cv::applyColorMap(displaySlicez, colorMappedz, cv::COLORMAP_HOT);
+        // cv::Mat rotatedImagez;
+        // cv::rotate(colorMappedz, rotatedImagez, cv::ROTATE_90_COUNTERCLOCKWISE);
+        // cv::imshow("XY", rotatedImagez);
 
         torch::Tensor view_raw = output_raw.to(torch::kCPU).contiguous();
         view_raw = (view_raw - view_raw.min()) / (view_raw.max() - view_raw.min());
@@ -386,7 +323,7 @@ int main(int argc, char* argv[]) {
         cv::Mat final_colored = applyColormapWithIntensity(depth_map, intensity_map);
         cv::Mat rotatedImage3d;
         cv::rotate(final_colored, rotatedImage3d, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::imshow("DEPTH", rotatedImage3d);
+        cv::imshow("XY", rotatedImage3d);
 
         cv::waitKey(10);
 

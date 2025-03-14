@@ -26,7 +26,6 @@ include_directories(${TORCH_INCLUDE_DIRS})
 # include_directories(${EIGEN3_INCLUDE_DIR})
 link_directories(${OpenCV_DIR}/x64/vc16/lib)  # Adjust this path based on your OpenCV version and configuration
 
-
 # modify this to add more and more cpp
 add_executable(executable_unet executable_unet.cpp utils/vrs_loader.cpp utils/INIReader.cpp utils/ini.c) # utils/beamforming.cpp 
 

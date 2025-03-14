@@ -8,7 +8,7 @@ start_time  = 1144 # PA
 end_time    = 1400 # PA
 Fc          = 15.625e6     # in hertz                       
 Fs          = 4*Fc 
-imsz        = 96
+imsz        = 72
 r           = 1.5  # in mm 
 cPA         = 1475 # in m #1475
 
@@ -34,7 +34,7 @@ def save_time_dist_PA(zidx,whichdim):
     # return time_points_distPA
 
     module = SaveTensor(time_points_distPA)
-    torch.jit.save(torch.jit.script(module),f"c{cPA}_3D_96.pt")
+    torch.jit.save(torch.jit.script(module),f"c{cPA}_3D_72.pt")
 
 if __name__=="__main__":
     sensor_pos = torch.load("../../data/sensor_pos_interp.pt")

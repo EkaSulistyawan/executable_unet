@@ -7,3 +7,13 @@
 
 *.vrs
 *.pt
+*.dll
+*.vcxproj
+*.vcxproj.filters
+*.cmake
+*.tlog
+*.recipe
+*.sln
+*.cc
+*.cuda
+*.pth

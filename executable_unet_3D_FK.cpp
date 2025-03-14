@@ -1,9 +1,9 @@
 /**
  * @file executable_unet_2D.cpp
  * @author sulis347@gmail.com
- * @brief this is 3D reconstruction + envelope + FK-filter + CF, and mip
+ * @brief this is 3D reconstruction + envelope + FK-filter and mip
  * @version 0.1
- * @date 2025-01-20
+ * @date 2025-01-14
  * 
  * @copyright Copyright (c) 2025
  * 
@@ -278,39 +278,31 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout << "Beamforming ..." << std::endl : void();
 
         torch::Tensor gathered3d = torch::gather(output, 1, distmat3d);  // Gather along columns
-        
-        torch::Tensor summed3d      = gathered3d.sum(0);  // Shape will be (511,)
-        torch::Tensor summed3dabs   = gathered3d.abs().sum(0);  // Shape will be (511,)
-
-        gathered3d.reset();
-
-        torch::Tensor beamformed3d      = summed3d.view({imsz,imsz,imsz});
-        torch::Tensor beamformed3dabs   = summed3dabs.view({imsz,imsz,imsz});
-
+        torch::Tensor summed3d = gathered3d.sum(0);  // Shape will be (511,)
+        torch::Tensor beamformed3d = summed3d.view({imsz,imsz,imsz});
         beamformed3d = beamformed3d.abs();
-        beamformed3d = beamformed3d * beamformed3d * beamformed3d / (511 * beamformed3dabs);
 
         torch::Tensor beamformedx = beamformed3d.index({imsz/2, torch::indexing::Slice(), torch::indexing::Slice()});
         torch::Tensor beamformedy = beamformed3d.index({torch::indexing::Slice(), imsz/2, torch::indexing::Slice()});
-        // torch::Tensor beamformedz = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), imsz/2});
-        torch::Tensor mipz = std::get<0>(beamformed3d.max(2)); // dim 2 corresponds to z-dimension
+        torch::Tensor beamformedz = beamformed3d.index({torch::indexing::Slice(), torch::indexing::Slice(), imsz/2});
+        torch::Tensor mipz        = std::get<0>(beamformed3d.max(2)); // dim 2 corresponds to z-dimension
 
         try{
             // catch if all beamform is zero 
             beamformedx = (beamformedx - beamformedx.min()) / (beamformedx.max() - beamformedx.min());
             beamformedy = (beamformedy - beamformedy.min()) / (beamformedy.max() - beamformedy.min());
-            // beamformedz = (beamformedz - beamformedz.min()) / (beamformedz.max() - beamformedz.min());
-            mipz = (mipz - mipz.min()) / (mipz.max() - mipz.min());
+            //beamformedz = (beamformedz - beamformedz.min()) / (beamformedz.max() - beamformedz.min());
+            mipz        = (mipz - mipz.min()) / (mipz.max() - mipz.min());
         }catch(...){
             beamformedx = beamformedx;
             beamformedy = beamformedy;
-            // beamformedz = beamformedz;
-            mipz = mipz;
+            //beamformedz = beamformedz;
+            mipz        = mipz;
         }
         beamformedx = beamformedx.to(torch::kCPU).contiguous();
         beamformedy = beamformedy.to(torch::kCPU).contiguous();
-        // beamformedz = beamformedz.to(torch::kCPU).contiguous();
-        mipz = mipz.to(torch::kCPU).contiguous();
+        //beamformedz = beamformedz.to(torch::kCPU).contiguous();
+        mipz        = mipz.to(torch::kCPU).contiguous();
         
         ///////////////////////////////////////////////////////////////////////// time 
         end = std::chrono::high_resolution_clock::now();
