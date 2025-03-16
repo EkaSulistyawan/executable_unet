@@ -1,5 +1,5 @@
 /**
- * @file executable_unet_2D.cpp
+ * @file executable_unet_3D_FK_CF.cpp
  * @author sulis347@gmail.com
  * @brief this is 3D reconstruction + envelope + FK-filter + CF, and mip
  * @version 0.1
@@ -134,8 +134,6 @@ int main(int argc, char* argv[]) {
     std::string model_path = reader.Get("general", "model_path", "../../model_traced.pt");
     std::string pathName = reader.Get("general", "pathName", "../../");
     std::string distpath3d = reader.Get("general", "distpath3d", "../../utils/pre_computed_distance/c1475_3D_64.pt");
-    std::string distpathUS = reader.Get("general", "distpathUS", "../../utils/pre_computed_distance/USZslice_c1475_64.pt");
-    
     // if (model_path.empty()) {
     //     std::cerr << "Model path is empty!" << std::endl;
     // } else {
@@ -157,16 +155,6 @@ int main(int argc, char* argv[]) {
         std::cout << "CUDA exist" << std::endl;
     }
     /////////////////////////////////////////////////////////////////////////// load distance matrix
-    // US
-    auto moduleUS = torch::jit::load(distpathUS);
-    torch::Tensor distmatUS = moduleUS.attr("tensor").toTensor();
-    if (torch::cuda::is_available()){
-        distmatUS = distmatUS.to(torch::kCUDA);
-    }
-    distmatUS = distmatUS.to(torch::kLong);
-    verbose ? std::cout << "US " << distmatUS.sizes() << std::endl : void();
-
-    // PA
     auto module3d = torch::jit::load(distpath3d);
     torch::Tensor distmat3d = module3d.attr("tensor").toTensor();
     if (torch::cuda::is_available()){
@@ -175,9 +163,6 @@ int main(int argc, char* argv[]) {
     distmat3d = torch::transpose(distmat3d,1,0).to(torch::kLong);
     verbose ? std::cout << distmat3d.sizes() << std::endl : void();
 
-
-    cv::namedWindow("US", cv::WINDOW_NORMAL);
-    cv::resizeWindow("US", 400, 400);
     cv::namedWindow("XZ", cv::WINDOW_NORMAL);
     cv::resizeWindow("XZ", 400, 400);
     cv::namedWindow("YZ", cv::WINDOW_NORMAL);
@@ -212,7 +197,7 @@ int main(int argc, char* argv[]) {
         if (torch::cuda::is_available()){
             tensor = tensor.to(torch::kCUDA);
         }
-        //============================================================= US processing
+
         // compute depth, use the last sensor
         verbose ? std::cout <<"Flag"<< std::endl : void();
         torch::Tensor usRF = tensor.index({255, idxUS, torch::indexing::Slice(1000, nt-1)});
@@ -224,63 +209,7 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout <<"Sizes : " << usRF.sizes() << std::endl : void();
         double depth = 30.0 - ((argmaxRFscalar + 1000.0) / 2.0) * c * 1e3 / Fs; // in mm
         verbose ? std::cout << depth << std::endl : void();
-        // get even data, shape is (256, Ndata, 3072), so we select the [0, 1, 3, 4, etc]
-        // tensor is (256, 30, 3072) --> get (256, 20, 3072) where third element is removed
-        // it will give you 20 data
-        // change the 20 and % 2 as the structure of the data
-        torch::Tensor indices = torch::arange(30, torch::kInt64).index(
-            {torch::arange(30, torch::kInt64) % 3 != 2}
-        );
-        verbose ? std::cout << "indices " << indices.sizes() << std::endl : void();
-    
-        // Index the tensor along the second dimension, should be (256, 20, 3072)
-        torch::Tensor usonly = tensor.index({torch::indexing::Slice(), indices, torch::indexing::Slice()});
-        verbose ? std::cout << "usonly " << usonly.sizes() << usonly.min() << usonly.max() << std::endl : void();
-        // hilbert
-        torch::Tensor fftvalUS = torch::fft::fft(usonly); // by default along last dimension
-        fftvalUS.narrow(2, nt/2, nt/2).zero_(); // Zero out the negative frequencies (right half)
-        torch::Tensor hilbertUS = torch::fft::ifft(fftvalUS);
-        verbose ? std::cout << "hilbertUS " << hilbertUS.sizes() << hilbertUS.device() << std::endl : void();
 
-        // beamform
-        verbose ? std::cout << "distmatUS " << distmatUS.device() << std::endl : void();
-        torch::Tensor usslice = torch::gather(hilbertUS, 2, distmatUS); 
-        verbose ? std::cout << "usslice " << usslice.sizes() << std::endl : void();
-        usslice = usslice.sum(0);
-        verbose ? std::cout << "flag sum " << std::endl : void();
-        usslice = usslice.sum(0);
-        verbose ? std::cout << "flag sum 2" << std::endl : void();
-        usslice = usslice.view({imsz,imsz});
-        usslice = usslice.abs();
-        verbose ? std::cout << "flag sum 2 " << usslice.max() << " " << usslice.min() << std::endl : void();
-        try{
-            usslice = usslice / usslice.max();
-            usslice = 20 * torch::log10(usslice);
-            verbose ? std::cout << "LogComp " << usslice.max() << " " << usslice.min() << std::endl : void();
-            usslice = torch::clamp(usslice, -60, 0);
-            verbose ? std::cout << "LogComp " << usslice.max() << " " << usslice.min() << std::endl : void();
-            usslice = usslice / -60; // this is for visualization
-            usslice = 1 - usslice;
-        }catch(...){
-            usslice = usslice;
-        }
-        verbose ? std::cout << "flag reshape" << usslice.sizes() << std::endl : void();
-
-        usslice = usslice.to(torch::kCPU).contiguous();
-        verbose ? std::cout << "flag" << std::endl : void();
-        cv::Mat imageUS(usslice.size(0), usslice.size(1), CV_32F, usslice.data_ptr<float>());
-        verbose ? std::cout << "flag" << std::endl : void();
-        cv::Mat displaySliceUS;
-        verbose ? std::cout << "flag" << std::endl : void();
-        imageUS.convertTo(displaySliceUS, CV_8U, 255.0);
-        verbose ? std::cout << "flag" << std::endl : void();
-        cv::Mat rotatedImageUS;
-        verbose ? std::cout << "flag" << std::endl : void();
-        cv::rotate(displaySliceUS, rotatedImageUS, cv::ROTATE_90_COUNTERCLOCKWISE);
-        verbose ? std::cout << "flag" << std::endl : void();
-        cv::imshow("US", rotatedImageUS);
-        verbose ? std::cout << "US end" << std::endl : void();
-        //============================================================= PA processing
         // get one slice
         tensor = tensor.slice(1, idx, idx+1);
         verbose ? std::cout <<"Sizes : " << tensor.sizes() << std::endl : void();
@@ -338,7 +267,7 @@ int main(int argc, char* argv[]) {
         output_raw = output_raw.squeeze();
         output_raw = output_raw.narrow(0, 0, output_raw.size(0) - 1); // removes last row
 
-        ///////////////////////////////////////////////////////////////////////// pabeamforming
+        ///////////////////////////////////////////////////////////////////////// beamforming
 
         /// hilbert transform
         torch::Tensor fftval = torch::fft::fft(output_raw); // by default along last dimension
