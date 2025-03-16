@@ -1,7 +1,7 @@
 /**
- * @file executable_unet_2D.cpp
+ * @file executable_unet.cpp
  * @author sulis347@gmail.com
- * @brief this is 3D reconstruction + envelope + FK-filter + CF, and mip
+ * @brief this is 3D reconstruction + envelope + FK-filter + CF + MIP + US
  * @version 0.1
  * @date 2025-01-20
  * 
@@ -26,7 +26,6 @@
 // custom
 #include "utils/vrs_loader.h"
 #include "utils/INIReader.h"
-#include "utils/compute_distance_matrix.h"
 
 
 std::string getLatestFile(const std::string& folderPath) {
@@ -83,6 +82,7 @@ int getLatestFileIndex(const std::string& folderPath) {
     return maxIndex;
 }
 
+
 cv::Mat applyColormapWithIntensity(const torch::Tensor& depth_normalized, const torch::Tensor& intensity_normalized) {
     // Convert tensors to CPU for OpenCV
     auto depth_normalized_cpu = depth_normalized.to(torch::kCPU);
@@ -116,30 +116,26 @@ int main(int argc, char* argv[]) {
         std::cout << "Can't load 'config.ini'\n";
         return 1;
     }
-    
-    // get all parameters
+
     int nt = reader.GetInteger("general", "nt", 3072);
     int ntx = reader.GetInteger("general", "ntx", 58);
     bool verbose = reader.GetBoolean("general", "verbose", false);
+    int dim3_start = reader.GetInteger("general", "dim3_start", 1144);
+    int dim3_stop = reader.GetInteger("general", "dim3_stop", 1400);
     int imsz = reader.GetInteger("general", "imsz", 128);
     int idx   = reader.GetInteger("general", "slice", 50);
     int idxUS = reader.GetInteger("general", "sliceUS", 1);
     int slice3dup = reader.GetInteger("general", "slice3dup", 0);
     int slice3ddown = reader.GetInteger("general", "slice3ddown", 64);
-    double cPA     = reader.GetReal("general", "cPA", 1475);
-    double cUS     = reader.GetReal("general", "cUS", 1475);
+    double c     = reader.GetReal("general", "cwater", 1475);
     double Fs  = reader.GetReal("general", "Fs", 62.5e6);
     double rs  = reader.GetReal("general", "rs", 1.5); // in mm
     int sleepdur = reader.GetInteger("general", "sleep_duration", 10);
     std::string model_path = reader.Get("general", "model_path", "../../model_traced.pt");
     std::string pathName = reader.Get("general", "pathName", "../../");
-    // std::string distpath3d = reader.Get("general", "distpath3d", "../../utils/pre_computed_distance/c1475_3D_64.pt");
-    // std::string distpathUS = reader.Get("general", "distpathUS", "../../utils/pre_computed_distance/USZslice_c1475_64.pt");
-    std::string ustxelements_str = reader.Get("general", "ustxelements", "../../utils/pre_computed_distance/UseTXElements_jit.pt");
-    std::string sensor_pos_str = reader.Get("general", "sensor_pos", "../../utils/pre_computed_distance/sensor_pos_jit.pt");
-    std::string sensor_pos_interp_str = reader.Get("general", "sensor_pos_interp", "../../utils/pre_computed_distance/sensor_pos_interp_jit.pt");
-    int usdim = reader.GetInteger("general", "us_slice_dim", 2);
-
+    std::string distpath3d = reader.Get("general", "distpath3d", "../../utils/pre_computed_distance/c1475_3D_64.pt");
+    std::string distpathUS = reader.Get("general", "distpathUS", "../../utils/pre_computed_distance/USZslice_c1475_64.pt");
+    
     // if (model_path.empty()) {
     //     std::cerr << "Model path is empty!" << std::endl;
     // } else {
@@ -160,18 +156,10 @@ int main(int argc, char* argv[]) {
         model.to(torch::kCUDA);
         std::cout << "CUDA exist" << std::endl;
     }
-    /////////////////////////////////////////////////////////////////////////// get distance matrix
+    /////////////////////////////////////////////////////////////////////////// load distance matrix
     // US
-    // auto module = torch::jit::load(distpathUS);
-    // torch::Tensor distmatUS = module.attr("tensor").toTensor();
-    auto module = torch::jit::load(sensor_pos_str);
-    torch::Tensor sensor_pos = module.attr("tensor").toTensor();
-    verbose ? std::cout << " loading sensor_pos succeed" << std::endl : void();
-    module = torch::jit::load(ustxelements_str);
-    torch::Tensor ustxelements = module.attr("tensor").toTensor();
-    verbose ? std::cout << " loading ustxelements succeed" << std::endl : void();
-    torch::Tensor distmatUS = create_time_dist_US(sensor_pos,ustxelements,usdim,rs,imsz,Fs,cUS);
-    verbose ? std::cout << " do distmatUS succeed" << std::endl : void();
+    auto moduleUS = torch::jit::load(distpathUS);
+    torch::Tensor distmatUS = moduleUS.attr("tensor").toTensor();
     if (torch::cuda::is_available()){
         distmatUS = distmatUS.to(torch::kCUDA);
     }
@@ -179,21 +167,8 @@ int main(int argc, char* argv[]) {
     verbose ? std::cout << "US " << distmatUS.sizes() << std::endl : void();
 
     // PA
-    // module = torch::jit::load(distpath3d);
-    // torch::Tensor distmat3d = module.attr("tensor").toTensor();
-    double d = std::sqrt(3 * (rs * rs));
-    int start_time_PA = std::floor((30 - d) * 1e-3 * Fs / cPA);
-    int end_time_PA = std::ceil((30 + d) * 1e-3 * Fs / cPA); // 30 is radius of the transducer
-
-    // Adjust for residue to make length exactly 256
-    int residue = 256 - (end_time_PA - start_time_PA);
-    start_time_PA -= residue / 2;
-    end_time_PA += residue / 2 + (residue % 2);
-
-    module = torch::jit::load(sensor_pos_interp_str);
-    torch::Tensor sensor_pos_interp = module.attr("tensor").toTensor();
-    torch::Tensor distmat3d = create_time_dist_PA(sensor_pos_interp,rs,imsz,Fs,cPA,start_time_PA);
-    verbose ? std::cout << " loading sensor_pos_interp succeed" << std::endl : void();
+    auto module3d = torch::jit::load(distpath3d);
+    torch::Tensor distmat3d = module3d.attr("tensor").toTensor();
     if (torch::cuda::is_available()){
         distmat3d = distmat3d.to(torch::kCUDA);
     }
@@ -247,7 +222,7 @@ int main(int argc, char* argv[]) {
         double argmaxRFscalar = argmaxRF.item<double>() ;
         
         verbose ? std::cout <<"Sizes : " << usRF.sizes() << std::endl : void();
-        double depth = 30.0 - ((argmaxRFscalar + 1000.0) / 2.0) * cUS * 1e3 / Fs; // in mm
+        double depth = 30.0 - ((argmaxRFscalar + 1000.0) / 2.0) * c * 1e3 / Fs; // in mm
         verbose ? std::cout << depth << std::endl : void();
         // get even data, shape is (256, Ndata, 3072), so we select the [0, 1, 3, 4, etc]
         // tensor is (256, 30, 3072) --> get (256, 20, 3072) where third element is removed
@@ -313,7 +288,7 @@ int main(int argc, char* argv[]) {
         tensor = tensor.to(torch::kFloat);
         verbose ? std::cout <<"Sizes : " << tensor.sizes() << std::endl: void();
         
-        tensor = tensor.slice(2, start_time_PA, end_time_PA);
+        tensor = tensor.slice(2, dim3_start, dim3_stop);
         verbose ? std::cout <<"Sizes : " << tensor.sizes() << std::endl: void();
         
         tensor = tensor.unsqueeze(0);

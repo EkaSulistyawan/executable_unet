@@ -12,6 +12,18 @@ imsz        = 72
 r           = 1.0  # in mm 
 cPA         = 1475 # in m #1475
 
+# # depth calculation
+# d = (3*(r**2))**0.5
+# # PA
+# start_time_PA  = np.floor((((sensor_pos.cpu().numpy()[:,0]**2).sum())**0.5 - d) * 1e-3 * Fs / cPA).astype(int) 
+# end_time_PA    = np.ceil((((sensor_pos.cpu().numpy()[:,0]**2).sum())**0.5 + d) * 1e-3 * Fs / cPA).astype(int)
+# # print(start_time_PA,end_time_PA)
+
+# residue = (256 - (end_time_PA - start_time_PA))
+
+# start_time_PA -= residue //2 
+# end_time_PA += residue//2 + np.mod(residue,2)
+
 
 class SaveTensor(torch.nn.Module):
     def __init__(self, tensor):

@@ -27,7 +27,14 @@ include_directories(${TORCH_INCLUDE_DIRS})
 link_directories(${OpenCV_DIR}/x64/vc16/lib)  # Adjust this path based on your OpenCV version and configuration
 
 # modify this to add more and more cpp
-add_executable(executable_unet executable_unet.cpp utils/vrs_loader.cpp utils/INIReader.cpp utils/ini.c) # utils/beamforming.cpp 
+add_executable(
+  executable_unet
+  executable_unet.cpp
+  utils/vrs_loader.cpp
+  utils/INIReader.cpp
+  utils/ini.c
+  utils/compute_distance_matrix.cpp
+  ) # utils/beamforming.cpp 
 
 target_link_libraries(executable_unet "${OpenCV_LIBS}" "${TORCH_LIBRARIES}")
 set_property(TARGET executable_unet PROPERTY CXX_STANDARD 17)

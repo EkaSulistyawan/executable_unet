@@ -20,7 +20,7 @@ class SaveTensor(torch.nn.Module):
         super().__init__()
         self.tensor = torch.nn.Parameter(tensor)
 
-def save_time_dist_US():
+def save_time_dist_US(dim=1):
     rix, riy, riz = np.meshgrid(
             np.linspace(-r, r, imsz),
             np.linspace(-r, r, imsz),
@@ -45,7 +45,12 @@ def save_time_dist_US():
     riz = torch.tensor(riz,dtype=torch.float).to(device)
   
     # get only mid slices
-    ri  = torch.stack([rix[:,imsz//2,:].flatten(),riy[:,imsz//2,:].flatten(),riz[:,imsz//2,:].flatten()],dim=-1)
+    if dim==0:
+        ri  = torch.stack([rix[imsz//2,:,:].flatten(),riy[imsz//2,:,:].flatten(),riz[imsz//2,:,:].flatten()],dim=-1)
+    elif dim==0:
+        ri  = torch.stack([rix[:,imsz//2,:].flatten(),riy[:,imsz//2,:].flatten(),riz[:,imsz//2,:].flatten()],dim=-1)
+    elif dim==0:
+        ri  = torch.stack([rix[:,:,imsz//2].flatten(),riy[:,:,imsz//2].flatten(),riz[:,:,imsz//2].flatten()],dim=-1)
     time_points_distUS_all = torch.zeros(256,len(UseTXElements),imsz*imsz)
     
     for i in range(len(UseTXElements)):
