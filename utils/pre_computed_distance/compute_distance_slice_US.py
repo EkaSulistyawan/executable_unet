@@ -13,6 +13,7 @@ cUS         = 1475 # in m #1475
 #UseTXElements   = torch.tensor([4,17,30,43,53,65,77,89,107,118,129,140,151,160,169,178,182,190,198,206,215,221,227,233,241,246,251,256], dtype=torch.float32) - 1
 UseTXElements   = torch.tensor([4,17,30,43,53,89,107,118,129,140,169,178,182,190,198,221,227,233,241,246], dtype=torch.float32) - 1
 # UseTXElements   = torch.ones(10) * (246 - 1)
+UseTXElements = torch.tensor([1,14,33]) - 1
 
 
 class SaveTensor(torch.nn.Module):
@@ -47,9 +48,9 @@ def save_time_dist_US(dim=1):
     # get only mid slices
     if dim==0:
         ri  = torch.stack([rix[imsz//2,:,:].flatten(),riy[imsz//2,:,:].flatten(),riz[imsz//2,:,:].flatten()],dim=-1)
-    elif dim==0:
+    elif dim==1:
         ri  = torch.stack([rix[:,imsz//2,:].flatten(),riy[:,imsz//2,:].flatten(),riz[:,imsz//2,:].flatten()],dim=-1)
-    elif dim==0:
+    elif dim==2:
         ri  = torch.stack([rix[:,:,imsz//2].flatten(),riy[:,:,imsz//2].flatten(),riz[:,:,imsz//2].flatten()],dim=-1)
     time_points_distUS_all = torch.zeros(256,len(UseTXElements),imsz*imsz)
     
@@ -59,7 +60,7 @@ def save_time_dist_US(dim=1):
         time_points_distUS_all[:,i,:] = ((phys_dist_rcv.T) * 1e-3 / cUS) * Fs
 
     module = SaveTensor(time_points_distUS_all)
-    torch.jit.save(torch.jit.script(module),f"USYslice_c{cUS}_{imsz}.pt")
+    torch.jit.save(torch.jit.script(module),f"USYslice_c{cUS}_{imsz}_v3.pt")
 
 if __name__=="__main__":
     d = (3*(r**2))**0.5

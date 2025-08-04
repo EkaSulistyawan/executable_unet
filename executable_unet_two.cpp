@@ -2,8 +2,8 @@
  * @file executable_unet.cpp
  * @author sulis347@gmail.com
  * @brief this is 3D reconstruction + envelope + FK-filter + CF + MIP + US
- * @version three US
- * @date 2025-08-04
+ * @version 0.1
+ * @date 2025-01-20
  * 
  * @copyright Copyright (c) 2025
  * 
@@ -111,9 +111,32 @@ cv::Mat applyColormapWithIntensity(const torch::Tensor& depth_normalized, const 
 
 int main(int argc, char* argv[]) {
 
-    INIReader reader(argv[1]);
-    if (reader.ParseError() < 0) {
-        std::cout << "Can't load 'config.ini'\n";
+    // INIReader reader(argv[1]);
+    // if (reader.ParseError() < 0) {
+    //     std::cout << "Can't load 'config.ini'\n";
+    //     return 1;
+    // }
+
+    std::string paths[] = {
+        argc > 1 ? argv[1] : "usconfig.ini",
+        "usconfig.ini",
+        "../usconfig.ini"
+    };
+
+    INIReader reader("");  // Dummy initialization
+    bool loaded = false;
+
+    for (const auto& path : paths) {
+        reader = INIReader(path);
+        if (reader.ParseError() == 0) {
+            std::cout << "Loaded config from: " << path << "\n";
+            loaded = true;
+            break;
+        }
+    }
+
+    if (!loaded) {
+        std::cout << "Failed to load configuration file.\n";
         return 1;
     }
 
@@ -224,16 +247,13 @@ int main(int argc, char* argv[]) {
         verbose ? std::cout <<"Sizes : " << usRF.sizes() << std::endl : void();
         double depth = 30.0 - ((argmaxRFscalar + 1000.0) / 2.0) * c * 1e3 / Fs; // in mm
         verbose ? std::cout << depth << std::endl : void();
-        // is (256, Ndata, 3072), so we select the [0, 1, 3, 4, etc]
+        // get even data, shape is (256, Ndata, 3072), so we select the [0, 1, 3, 4, etc]
         // tensor is (256, 30, 3072) --> get (256, 20, 3072) where third element is removed
         // it will give you 20 data
         // change the 20 and % 2 as the structure of the data
-        // torch::Tensor indices = torch::arange(30, torch::kInt64).index(
-        //     {torch::arange(30, torch::kInt64) % 3 != 2}
-        // );
-        
-        // this version only get the 
-        torch::Tensor indices = torch::arange(3, torch::kInt64) + 1;
+        torch::Tensor indices = torch::arange(30, torch::kInt64).index(
+            {torch::arange(30, torch::kInt64) % 3 != 2}
+        );
         verbose ? std::cout << "indices " << indices.sizes() << std::endl : void();
     
         // Index the tensor along the second dimension, should be (256, 20, 3072)
